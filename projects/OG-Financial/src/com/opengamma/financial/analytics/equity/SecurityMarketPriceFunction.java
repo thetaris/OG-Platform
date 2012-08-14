@@ -26,12 +26,11 @@ import com.opengamma.financial.security.FinancialSecurityUtils;
 import com.opengamma.financial.security.MarketSecurityVisitor;
 import com.opengamma.util.money.Currency;
 
-
 /**
  * Provides the market price for the security of a position as a value on the position
  */
 public class SecurityMarketPriceFunction extends AbstractFunction.NonCompiledInvoker {
-  
+
   private static MarketSecurityVisitor s_judgeOfMarketSecurities = new MarketSecurityVisitor();
 
   @Override
@@ -48,11 +47,10 @@ public class SecurityMarketPriceFunction extends AbstractFunction.NonCompiledInv
 
   @Override
   public boolean canApplyTo(FunctionCompilationContext context, ComputationTarget target) {
-    if (target.getType() != getTargetType()) {
+    if (!(target.getPosition().getSecurity() instanceof FinancialSecurity)) {
       return false;
     }
     final FinancialSecurity security = (FinancialSecurity) target.getPosition().getSecurity();
-    
     return security.accept(s_judgeOfMarketSecurities);
   }
 
@@ -79,7 +77,7 @@ public class SecurityMarketPriceFunction extends AbstractFunction.NonCompiledInv
     return new ValueSpecification(new ValueRequirement(ValueRequirementNames.SECURITY_MARKET_PRICE,
         target.getPosition(), valueProperties), getUniqueId());
   }
-  
+
   private ValueRequirement getRequirement(ComputationTarget target) {
     return new ValueRequirement(MarketDataRequirementNames.MARKET_VALUE, target.getPosition().getSecurity());
     // TESTING: The following will use BLOOMBERG_TICKER_WEAK, hence will not put a strain on the amount of data requested from BBG in a day
