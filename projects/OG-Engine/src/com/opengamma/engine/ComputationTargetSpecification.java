@@ -18,7 +18,6 @@ import com.opengamma.id.ExternalIdentifiable;
 import com.opengamma.id.UniqueId;
 import com.opengamma.id.UniqueIdentifiable;
 import com.opengamma.livedata.LiveDataSpecification;
-import com.opengamma.livedata.normalization.StandardRules;
 import com.opengamma.util.ArgumentChecker;
 import com.opengamma.util.PublicAPI;
 
@@ -30,7 +29,7 @@ import com.opengamma.util.PublicAPI;
 public final class ComputationTargetSpecification implements Serializable {
 
   private static final long serialVersionUID = 1L;
-  
+
   /**
    * The type of the target.
    */
@@ -102,7 +101,12 @@ public final class ComputationTargetSpecification implements Serializable {
     if (_uniqueId == null) {
       return null;
     }
-    return ExternalId.of(_uniqueId.getScheme(), _uniqueId.getValue());
+    final String version = _uniqueId.getVersion();
+    if (version != null) {
+      return ExternalId.of(_uniqueId.getScheme(), _uniqueId.getValue() + "~" + version);
+    } else {
+      return ExternalId.of(_uniqueId.getScheme(), _uniqueId.getValue());
+    }
   }
 
   /**
@@ -126,14 +130,16 @@ public final class ComputationTargetSpecification implements Serializable {
    * @throws OpenGammaRuntimeException If there is no live data directly corresponding to the target
    */
   public LiveDataSpecification getRequiredLiveData(final SecuritySource securitySource) {
-    switch(getType()) {
+    switch (getType()) {
       case PRIMITIVE:
         // Just use the identifier as given.
-        return new LiveDataSpecification(StandardRules.getOpenGammaRuleSetId(), getIdentifier());
+        //return new LiveDataSpecification(StandardRules.getOpenGammaRuleSetId(), getIdentifier());
+        return new LiveDataSpecification("No Normalization", getIdentifier());
       case SECURITY:
         final Security security = securitySource.getSecurity(getUniqueId());
         // Package up the other identifiers
-        return new LiveDataSpecification(StandardRules.getOpenGammaRuleSetId(), security.getExternalIdBundle());
+        //return new LiveDataSpecification(StandardRules.getOpenGammaRuleSetId(), security.getExternalIdBundle());
+        return new LiveDataSpecification("No Normalization", security.getExternalIdBundle());
       default:
         throw new OpenGammaRuntimeException("No LiveData is needed to for " + this);
     }
@@ -166,12 +172,12 @@ public final class ComputationTargetSpecification implements Serializable {
   @Override
   public String toString() {
     return new StrBuilder()
-      .append("CTSpec[")
-      .append(getType())
-      .append(", ")
-      .append(getUniqueId())
-      .append(']')
-      .toString();
+        .append("CTSpec[")
+        .append(getType())
+        .append(", ")
+        .append(getUniqueId())
+        .append(']')
+        .toString();
   }
 
 }
