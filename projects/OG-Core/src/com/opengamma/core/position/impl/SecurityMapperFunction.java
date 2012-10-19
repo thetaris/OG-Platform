@@ -20,7 +20,7 @@ public class SecurityMapperFunction implements PortfolioMapperFunction<Security>
   }
 
   @Override
-  public Security apply(Position position) {
+  public Security apply(PortfolioNode parentNode, Position position) {
     return position.getSecurity();
   }
   

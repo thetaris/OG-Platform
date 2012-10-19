@@ -29,6 +29,6 @@ public interface PortfolioMapperFunction<T> {
    * @param position  the position, not null
    * @return the transformed position
    */
-  T apply(Position position);
+  T apply(PortfolioNode parentNode, Position position);
   
 }

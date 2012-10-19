@@ -13,6 +13,7 @@ import com.opengamma.core.position.Position;
 import com.opengamma.core.position.impl.PortfolioMapper;
 import com.opengamma.core.position.impl.PortfolioMapperFunction;
 import com.opengamma.engine.ComputationTargetSpecification;
+import com.opengamma.engine.target.ComputationTargetType;
 import com.opengamma.engine.value.ValueProperties;
 import com.opengamma.engine.view.ViewCalculationConfiguration;
 import com.opengamma.engine.view.compilation.CompiledViewDefinition;
@@ -74,8 +75,10 @@ public class PortfolioGridStructure extends MainGridStructure {
       }
 
       @Override
-      public Row apply(Position position) {
-        ComputationTargetSpecification target = ComputationTargetSpecification.of(position);
+      public Row apply(PortfolioNode parentNode, Position position) {
+        ComputationTargetSpecification target =
+            ComputationTargetSpecification.of(parentNode)
+                .containing(ComputationTargetType.POSITION, position.getUniqueId());
         return new Row(target, position.getSecurity().getName(), position.getQuantity());
       }
     };

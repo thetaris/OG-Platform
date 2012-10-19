@@ -54,7 +54,7 @@ import com.opengamma.util.ArgumentChecker;
 
   @Override
   public void preOrderOperation(final PortfolioNode parentNode, final Position position) {
-    T result = _fn.apply(position);
+    T result = _fn.apply(parentNode, position);
     if (result != null) {
       _values.add(result);
     }

@@ -20,7 +20,7 @@ public class SecurityTypeMapperFunction implements PortfolioMapperFunction<Strin
   }
 
   @Override
-  public String apply(Position position) {
+  public String apply(PortfolioNode parentNode, Position position) {
     Security security = position.getSecurity();
     return security != null ? security.getSecurityType() : null;
   }
