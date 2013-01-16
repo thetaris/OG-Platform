@@ -162,6 +162,8 @@ public class ManageableSecurityLink extends AbstractLink<Security> implements Se
         return bundle.getValue(ExternalSchemes.RIC);
       } else if (bundle.getValue(ExternalSchemes.ACTIVFEED_TICKER) != null) {
         return bundle.getValue(ExternalSchemes.ACTIVFEED_TICKER);
+      } else if (bundle.getValue(ExternalSchemes.IB_CONTRACT) != null) {
+        return bundle.getValue(ExternalSchemes.IB_CONTRACT);
       } else {
         return bundle.getExternalIds().iterator().next().getValue();
       }

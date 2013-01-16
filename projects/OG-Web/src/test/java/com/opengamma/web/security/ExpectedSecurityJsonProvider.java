@@ -179,6 +179,9 @@ import com.opengamma.util.time.Expiry;
     if (externalIdBundle.getExternalId(ExternalSchemes.SEDOL1) != null) {
       identifiers.put(ExternalSchemes.SEDOL1.getName(), ExternalSchemes.SEDOL1.getName() + "-" + externalIdBundle.getValue(ExternalSchemes.SEDOL1));
     }
+    if (externalIdBundle.getExternalId(ExternalSchemes.IB_CONTRACT) != null) {
+      identifiers.put(ExternalSchemes.IB_CONTRACT.getName(), ExternalSchemes.IB_CONTRACT.getName() + "-" + externalIdBundle.getValue(ExternalSchemes.IB_CONTRACT));
+    }
     secMap.put("identifiers", identifiers);
   }
 

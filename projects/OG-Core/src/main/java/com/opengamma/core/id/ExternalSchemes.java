@@ -87,6 +87,10 @@ public class ExternalSchemes {
    * Identification scheme for ICAP market data feed tickers.
    */
   public static final ExternalScheme ICAP = ExternalScheme.of("ICAP");
+  /**
+   * Identification scheme for Interactive Brokers contracts.
+   */
+  public static final ExternalScheme IB_CONTRACT = ExternalScheme.of("IB_CONTRACT");
 
   //-------------------- SCHEMES FOR REGIONS ---------------------
 
@@ -362,6 +366,56 @@ public class ExternalSchemes {
     }
     return ExternalId.of(ICAP, ticker);
   }
+
+  /**
+   * Creates an Interactive Brokers unique ID.
+   * <p>
+   * This UID is comprised of two key parts: <ol>
+   * <li>the contract identifier (Conid). This code is supplied by Interactive Brokers. 
+   * <li>the exchange symbol, as defined by Interactive Brokers.
+   * </ol>
+   * Examples might be: <ul>
+   * <li>{@code 12087792@IDEALPRO} for the EUR.USD Forex rate 
+   * <li>{@code 825711@DTB} for the DAX Index (DTB is the IB symbol for EUREX)
+   * <li>{@code 1411277@FWB} for the IBM stock (FWB stands for Frankfurter Wertpapierboerse) 
+   * </ul>
+   * 
+   * TODO: determine whether the exchange symbol can always be queried via the IB interface using the contract ID, 
+   * in which case this method would become obsolete and replaced by {@link ExternalSchemes#ibContractID(String)}.
+   *  
+   * @param code the IB UID, not null
+   * @return the security identifier, not null
+   * @see ExternalSchemes#ibContractID(String)
+   */
+  public static ExternalId ibUID(final String code) {
+    ArgumentChecker.notNull(code, "code");
+    if (code.length() == 0) {
+      throw new IllegalArgumentException("Interactive Brokers unique ID is invalid: " + code);
+    }
+    return ExternalId.of(IB_CONTRACT, code);
+  }
+
+  /**
+   * Creates an Interactive Brokers contract ID.
+   * <p>
+   * This code represents the contract identifier (Conid) as supplied by Interactive Brokers. <br/>
+   * Examples might be: <ul>
+   * <li>{@code 12087792} for the EUR.USD Forex rate traded at IDEALPRO 
+   * <li>{@code 825711} for the DAX Index traded at DTB (the IB symbol for EUREX)
+   * <li>{@code 1411277} for the IBM stock traded at FWB (stands for Frankfurter Wertpapierboerse) 
+   * </ul>
+   * 
+   * @param code the IB contract ID, not null
+   * @return the security identifier, not null
+   */
+  public static ExternalId ibContractID(final String code) {
+    ArgumentChecker.notNull(code, "code");
+    if (code.length() == 0) {
+      throw new IllegalArgumentException("Interactive Brokers contract ID is invalid: " + code);
+    }
+    return ExternalId.of(IB_CONTRACT, code);
+  }
+
   // -------------------------- METHODS FOR REGIONS ---------------------------
 
   /**

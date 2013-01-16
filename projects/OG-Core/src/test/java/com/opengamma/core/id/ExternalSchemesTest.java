@@ -25,6 +25,7 @@ public class ExternalSchemesTest {
     assertEquals("BLOOMBERG_TICKER", ExternalSchemes.BLOOMBERG_TICKER.getName());
     assertEquals("BLOOMBERG_TCM", ExternalSchemes.BLOOMBERG_TCM.getName());
     assertEquals("RIC", ExternalSchemes.RIC.getName());
+    assertEquals("IB_CONTRACT", ExternalSchemes.IB_CONTRACT.getName());
   }
 
   public void test_identifiers() {
@@ -35,6 +36,7 @@ public class ExternalSchemesTest {
     assertEquals(ExternalId.of("BLOOMBERG_TICKER", "A"), ExternalSchemes.bloombergTickerSecurityId("A"));
     assertEquals(ExternalId.of("BLOOMBERG_TCM", "T 4.75 15/08/43 Govt"), ExternalSchemes.bloombergTCMSecurityId("T", "4.75", "15/08/43", "Govt"));
     assertEquals(ExternalId.of("RIC", "A"), ExternalSchemes.ricSecurityId("A"));
+    assertEquals(ExternalId.of("IB_CONTRACT", "A"), ExternalSchemes.ibContractID("A"));
   }
 
   @Test(expectedExceptions = IllegalArgumentException.class)
@@ -70,6 +72,11 @@ public class ExternalSchemesTest {
   @Test(expectedExceptions = IllegalArgumentException.class)
   public void test_ric_null() {
     ExternalSchemes.ricSecurityId(null);
+  }
+
+  @Test(expectedExceptions = IllegalArgumentException.class)
+  public void test_ibContract_null() {
+    ExternalSchemes.ibContractID(null);
   }
 
 }

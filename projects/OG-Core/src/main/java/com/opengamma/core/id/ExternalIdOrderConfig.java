@@ -49,6 +49,7 @@ public class ExternalIdOrderConfig extends DirectBean {
     s_defaultScoreMap.put(ExternalSchemes.OG_SYNTHETIC_TICKER, 10);
     s_defaultScoreMap.put(ExternalSchemes.BLOOMBERG_BUID, 5);
     s_defaultScoreMap.put(ExternalSchemes.BLOOMBERG_BUID_WEAK, 4);
+    s_defaultScoreMap.put(ExternalSchemes.IB_CONTRACT, 3);
     DEFAULT_CONFIG.setRateMap(s_defaultScoreMap);
   }
   

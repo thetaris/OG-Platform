@@ -33,6 +33,7 @@ public class ExternalIdDisplayComparator implements Comparator<ExternalId> {
     s_scoreMap.put(ExternalSchemes.OG_SYNTHETIC_TICKER, 10);
     s_scoreMap.put(ExternalSchemes.BLOOMBERG_BUID, 5);
     s_scoreMap.put(ExternalSchemes.BLOOMBERG_BUID_WEAK, 4);
+    s_scoreMap.put(ExternalSchemes.IB_CONTRACT, 3);
   }
   
   /**

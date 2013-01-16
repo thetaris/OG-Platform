@@ -25,6 +25,7 @@ public class OrderIdConfigFudgeBuilderTest extends AbstractFudgeBuilderTestCase 
     _scoreMap.put(ExternalSchemes.OG_SYNTHETIC_TICKER, 10);
     _scoreMap.put(ExternalSchemes.BLOOMBERG_BUID, 5);
     _scoreMap.put(ExternalSchemes.BLOOMBERG_BUID_WEAK, 4);
+    _scoreMap.put(ExternalSchemes.IB_CONTRACT, 3);
     ExternalIdOrderConfig externalIdOrderConfig = new ExternalIdOrderConfig();
     externalIdOrderConfig.setRateMap(_scoreMap);
     cycleObject(ExternalIdOrderConfig.class, externalIdOrderConfig);
