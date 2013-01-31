@@ -1,25 +1,34 @@
 /**
- * Copyright (C) 2013 - present by OpenGamma Inc. and the OpenGamma group of companies
+ * Copyright (C) 2009 - present by OpenGamma Inc. and the OpenGamma group of companies
  *
  * Please see distribution for license.
  */
 package com.opengamma.livedata.ib.server;
 
+import org.fudgemsg.MutableFudgeMsg;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.ib.client.ContractDetails;
+import com.ib.client.EClientSocket;
 import com.ib.client.TickType;
+import com.opengamma.OpenGammaRuntimeException;
+import com.opengamma.util.fudgemsg.OpenGammaFudgeContext;
 
 /**
- * The wrapper listens to IB server responses.
+ * The wrapper listens to IB API responses. 
+ * Used as callback when constructing an IB client.
+ * @see EClientSocket#EClientSocket(com.ib.client.AnyWrapper)
  */
 public class OpenGammaIBWrapper extends AbstractBaseWrapper {
 
   /** Logger. */
   private static final Logger s_logger = LoggerFactory.getLogger(OpenGammaIBWrapper.class);
 
-  public OpenGammaIBWrapper() {
+  private IBLiveDataServer _ibLiveDataServer;
+
+  public OpenGammaIBWrapper(IBLiveDataServer ibLiveDataServer) {
+    this._ibLiveDataServer = ibLiveDataServer;
   }
 
   ///////////////////////////////////////////////////////////////////////
@@ -29,9 +38,18 @@ public class OpenGammaIBWrapper extends AbstractBaseWrapper {
   @Override
   public void tickPrice(int tickerId, int field, double price, int canAutoExecute) {
     s_logger.debug("IB callback: tickPrice");
-    String msg = "id=" + tickerId + "  " + TickType.getField( field) + "=" + price + " " + 
-    ((canAutoExecute != 0) ? " canAutoExecute" : " noAutoExecute");
-    s_logger.debug(msg);
+    String s = "IB tick received tid=" + tickerId + "  " + TickType.getField(field) + "=" + price;
+    s_logger.debug(s);
+    MutableFudgeMsg data = OpenGammaFudgeContext.getInstance().newMessage();
+    String tickType = TickType.getField(field);
+    data.add(tickType, price);
+    IBDataChunk chunk = new IBDataChunk(tickerId, data);
+    try {
+      _ibLiveDataServer.getDataChunks().put(chunk);
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+      throw new OpenGammaRuntimeException("IB data chunk queue put wait interrupted", e);
+    }
   }
 
   @Override
@@ -67,8 +85,16 @@ public class OpenGammaIBWrapper extends AbstractBaseWrapper {
 
   @Override
   public void contractDetails(int reqId, ContractDetails contractDetails) {
-    s_logger.debug("IB callback: contractDetails");
-    super.contractDetails(reqId, contractDetails);
+    String s = "IB callback: contract details received tid=" + reqId + " data=" + contractDetails;
+    s_logger.debug(s);
+    MutableFudgeMsg data = OpenGammaFudgeContext.getInstance().newMessage();
+    data.add(IBConstants.CONTRACT_DETAILS, contractDetails);
+    IBDataChunk chunk = new IBDataChunk(reqId, data);
+    try {
+      _ibLiveDataServer.getDataChunks().put(chunk);
+    } catch (InterruptedException e) {
+      throw new OpenGammaRuntimeException("IB data chunk queue put wait interrupted", e);
+    }
   }
 
   @Override
@@ -79,8 +105,16 @@ public class OpenGammaIBWrapper extends AbstractBaseWrapper {
 
   @Override
   public void contractDetailsEnd(int reqId) {
-    s_logger.debug("IB callback: contractDetailsEnd");
-    super.contractDetailsEnd(reqId);
+    String s = "IB callback: contract details end received tid=" + reqId;
+    s_logger.debug(s);
+    MutableFudgeMsg data = OpenGammaFudgeContext.getInstance().newMessage();
+    data.add(IBConstants.CONTRACT_DETAILS_END, null);
+    IBDataChunk chunk = new IBDataChunk(reqId, data);
+    try {
+      _ibLiveDataServer.getDataChunks().put(chunk);
+    } catch (InterruptedException e) {
+      throw new OpenGammaRuntimeException("IB data chunk queue put wait interrupted", e);
+    }
   }
 
   @Override

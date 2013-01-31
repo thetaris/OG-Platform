@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2013 - present by OpenGamma Inc. and the OpenGamma group of companies
+ * Copyright (C) 2009 - present by OpenGamma Inc. and the OpenGamma group of companies
  * 
  * Please see distribution for license.
  */
@@ -31,13 +31,15 @@ import com.opengamma.livedata.normalization.StandardRules;
 import com.opengamma.livedata.resolver.DefaultDistributionSpecificationResolver;
 import com.opengamma.livedata.resolver.IBJmsTopicNameResolver;
 import com.opengamma.livedata.resolver.IdentityIdResolver;
+import com.opengamma.livedata.server.MapLastKnownValueStoreProvider;
 import com.opengamma.livedata.server.StandardLiveDataServer;
-import com.opengamma.livedata.server.distribution.JmsSenderFactory;
+import com.opengamma.livedata.server.distribution.EmptyMarketDataSenderFactory;
+import com.opengamma.livedata.server.distribution.MarketDataSenderFactory;
 import com.opengamma.provider.livedata.LiveDataMetaData;
 import com.opengamma.provider.livedata.LiveDataServerTypes;
 
 /**
- * Component factory to create a Interactive Brokers live data server.
+ * Component factory to create an {@link IBLiveDataServer Interactive Brokers live data server}.
  */
 @BeanDefinition
 public class IBLiveDataServerFactory extends AbstractStandardLiveDataServerComponentFactory {
@@ -65,7 +67,6 @@ public class IBLiveDataServerFactory extends AbstractStandardLiveDataServerCompo
   @Override
   protected StandardLiveDataServer initServer(ComponentRepository repo) {
     s_logger.info("Initing Interactive Brokers live data server...");
-    System.out.println("Init Interactive Brokers live data server...");
     
     IBLiveDataServer server = new IBLiveDataServer(true, getHost(), getPort());
     
@@ -85,11 +86,14 @@ public class IBLiveDataServerFactory extends AbstractStandardLiveDataServerCompo
     // entitlement checking is probably not needed, so the default permissive one should be ok.
     server.setEntitlementChecker(new PermissiveLiveDataEntitlementChecker());
     
-    JmsSenderFactory senderFactory = new JmsSenderFactory(getJmsConnector());
+    MarketDataSenderFactory senderFactory = new EmptyMarketDataSenderFactory();
+    //MarketDataSenderFactory senderFactory = new JmsSenderFactory(getJmsConnector());
     server.setMarketDataSenderFactory(senderFactory);
     
+    // cache values in a FudgeHistoryStore which is backed by a simple map
+    server.setLkvStoreProvider(new MapLastKnownValueStoreProvider());
+    
     s_logger.info("Init Interactive Brokers live data server finished");
-    System.out.println("Init Interactive Brokers live data server finished");
     return server;
   }
 
