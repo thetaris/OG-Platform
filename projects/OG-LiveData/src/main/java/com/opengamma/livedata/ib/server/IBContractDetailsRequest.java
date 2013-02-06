@@ -5,6 +5,7 @@
  */
 package com.opengamma.livedata.ib.server;
 
+import java.util.Collections;
 import java.util.Set;
 
 import org.fudgemsg.FudgeMsg;
@@ -14,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import com.ib.client.Contract;
+import com.ib.client.ContractDetails;
 import com.ib.client.EClientSocket;
 
 /**
@@ -25,7 +27,7 @@ public class IBContractDetailsRequest extends IBRequest {
   private static final Logger s_logger = LoggerFactory.getLogger(IBContractDetailsRequest.class);
 
   /** Data fields required to fulfill this request. */
-  private static final Set<String> REQUIRED_FIELD_NAMES = ImmutableSet.of(
+  public static final Set<String> REQUIRED_FIELD_NAMES = ImmutableSet.of(
       IBConstants.CONTRACT_DETAILS, 
       IBConstants.CONTRACT_DETAILS_END);
 
@@ -36,7 +38,7 @@ public class IBContractDetailsRequest extends IBRequest {
     super(server, uniqueId);
   }
 
-  public Set<String> getFieldNames() {
+  protected Set<String> getFieldNames() {
     return _fieldNames;
   }
 
@@ -47,13 +49,13 @@ public class IBContractDetailsRequest extends IBRequest {
     setResponse(null);
     
     // build request data
-    EClientSocket conn = getConnector();
     Contract contract = new Contract();
     contract.m_conId = getContractId();
     
     // fire async call to IB API
     String msg = "firing IB contract details request for cid=" + getContractId() + " with tid=" + getCurrentTickerId();
     getLogger().debug(msg);
+    EClientSocket conn = getConnector();
     conn.reqContractDetails(getCurrentTickerId(), contract);
   }
 
@@ -69,7 +71,7 @@ public class IBContractDetailsRequest extends IBRequest {
     }
     
     FudgeMsg data = chunk.getData();
-    String msg = "IB contract details response chunk received: id=" + getCurrentTickerId() + "  cid=" + getContractId() + "  chunk=" + data;
+    String msg = "processing IB contract details response chunk: id=" + getCurrentTickerId() + "  cid=" + getContractId() + "  chunk=" + data;
     getLogger().debug(msg);
     Set<String> chunkFieldNames = data.getAllFieldNames();
     for (String fieldName : chunkFieldNames) {
@@ -102,6 +104,22 @@ public class IBContractDetailsRequest extends IBRequest {
     // override to do nothing, as this is an internal request, 
     // the response of which is only needed to fire other requests 
     // (namely the exchange must be determined)
+  }
+
+  /**
+   * IB returns all valid exchanges where a contract is traded as part of a contract details request. 
+   * The exchanges are encoded in a comma-separated string. 
+   * This method splits the IB string into a normalized set.
+   * @param validExchanges string of valid exchanges as returned by IB
+   * @return normalized set of exchange names
+   * @see ContractDetails#m_validExchanges
+   */
+  public static final Set<String> getValidExchanges(String validExchanges) {
+    if (validExchanges == null || validExchanges.isEmpty()) {
+      return Collections.emptySet();
+    }
+    String[] exchanges = validExchanges.split(",");
+    return Sets.newHashSet(exchanges);
   }
 
 }

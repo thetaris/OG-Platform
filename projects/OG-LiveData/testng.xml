@@ -11,6 +11,7 @@
       <class name="com.opengamma.livedata.client.ValueDistributorTest"/>
       <class name="com.opengamma.livedata.entitlement.DistributedEntitlementCheckerTest"/>
       <class name="com.opengamma.livedata.entitlement.UserEntitlementCheckerTest"/>
+      <class name="com.opengamma.livedata.ib.server.IBLiveDataServerTest"/>
       <class name="com.opengamma.livedata.msg.LiveDataSubscriptionResponseTest"/>
       <class name="com.opengamma.livedata.normalization.FieldFilterTest"/>
       <class name="com.opengamma.livedata.normalization.FieldNameChangeTest"/>

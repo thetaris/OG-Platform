@@ -16,7 +16,7 @@ import com.ib.client.EClientSocket;
  * A Request lifecycle object which calls the Interactive Brokers API and 
  * {@link #processChunk(IBDataChunk) processes} all matching response chunks 
  * until the request is fulfilled. 
- * Once a complete response object has been assembled, it will by default 
+ * Once a complete response object has been assembled, it may  
  * be published to the live data server via {@link #publishResponse()}.
  */
 public abstract class IBRequest {
@@ -88,9 +88,6 @@ public abstract class IBRequest {
    * @return the Fudge encoded response
    */
   public FudgeMsg getResponse() {
-    if (!isResponseFinished()) {
-      return null;
-    }
     return _response.get();
   }
 
@@ -127,18 +124,15 @@ public abstract class IBRequest {
   public abstract Logger getLogger();
 
   /**
-   * Publishes a complete response (as determined by {@link #isResponseFinished()}). 
-   * The current response object to publish is retrieved via {@link #getResponse()} 
-   * and should be available at least until a new request is fired, 
-   * or - in the case of ongoing subscriptions - until the next response is complete.
+   * Publishes the current response as retrieved via {@link #getResponse()}. 
+   * This should ideally be called once, after a request is fired and the response available, 
+   * or - in the case of ongoing subscriptions - when the next publishable response is complete.
    */
   protected void publishResponse() {
-    if (isResponseFinished()) {
-      FudgeMsg response = getResponse();
-      if (response != null) {
-        getLogger().debug("request: " + this + " has finished -> trigger server liveDataReceived() with response: " + response);
-        getServer().liveDataReceived(getUniqueId(), response);
-      }
+    FudgeMsg response = getResponse();
+    if (response != null) {
+      getLogger().debug("request: " + this + " has finished -> trigger server liveDataReceived() with response: " + response);
+      getServer().liveDataReceived(getUniqueId(), response);
     }
   }
 

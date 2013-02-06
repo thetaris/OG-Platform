@@ -11,9 +11,12 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -23,9 +26,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.common.collect.Maps;
-import com.ib.client.Contract;
+import com.google.common.collect.Sets;
+import com.ib.client.ContractDetails;
 import com.ib.client.EClientSocket;
 import com.ib.client.EWrapper;
+import com.opengamma.OpenGammaRuntimeException;
 import com.opengamma.core.id.ExternalSchemes;
 import com.opengamma.id.ExternalScheme;
 import com.opengamma.livedata.server.StandardLiveDataServer;
@@ -41,29 +46,44 @@ import com.opengamma.util.fudgemsg.OpenGammaFudgeContext;
  */
 public class IBLiveDataServer extends StandardLiveDataServer {
 
+  // infrastructure
   /** Logger. */
   private static final Logger s_logger = LoggerFactory.getLogger(IBLiveDataServer.class);
 
-  private static final ExecutorService s_executorService = Executors.newCachedThreadPool(new NamedThreadPoolFactory("IBLiveDataServer"));
+  private static final ExecutorService s_executorService = Executors.newSingleThreadExecutor(new NamedThreadPoolFactory("IBLiveDataServer"));
 
   // configuration
   private final String _host;
   private final int _port;
   
   // state
+  /** total number of IB connections made during this server's lifecycle */
   private volatile int _numConnections; // = 0;
 
-  /** request handlers increment this counter for each request made */
+  /** identifies a data line of ticks associated with a request; incremented for each request made */
   private static AtomicInteger _tickerId = new AtomicInteger();
 
+  /** requests are made via IB API calls into this IB class */
   private EClientSocket _connector;
+  
+  /** responses are handled by implementing this interface */
   private EWrapper _callback;
+
+  // mappings of IB tickerId to OpenGamma uniqueId and internal requests 
   private final Map<Integer, String> _tickerId2uniqueId = new HashMap<Integer, String>();
   private final Map<Integer, IBRequest> _tickerId2request = new HashMap<Integer, IBRequest>();
-  private final BlockingQueue<IBDataChunk> _received = new LinkedBlockingQueue<IBDataChunk>();
+  
+  /** indicates progress for synchronous market data snapshots */
+  private final Set<String> _waitingFor = Sets.newSetFromMap(new ConcurrentHashMap<String, Boolean>());
+  
+  /** blocking queue which holds data chunks produced by IB until they are consumed by requests */
+  private final BlockingQueue<IBDataChunk> _chunks = new LinkedBlockingQueue<IBDataChunk>();
 
   /** dispatches IB data chunks to the IB requests they belong to */
   private TerminatableJob _dispatcher;
+
+  /** timeout used when waiting for market data requests */
+  private long _marketDataTimeout = 60000000000L;
 
   public IBLiveDataServer(boolean isPerformanceCountingEnabled, String host, int port) {
     super(EHCacheUtils.createCacheManager(), isPerformanceCountingEnabled);
@@ -99,34 +119,52 @@ public class IBLiveDataServer extends StandardLiveDataServer {
     return s_executorService;
   }
 
-  /** package */ int getNextTickerId() {
+  protected void setMarketDataTimeout(final long timeout, final TimeUnit unit) {
+    _marketDataTimeout = unit.toNanos(timeout);
+  }
+
+  protected long getMarketDataTimeout() {
+    return _marketDataTimeout;
+  }
+
+  /** package */
+  int getNextTickerId() {
     return _tickerId.incrementAndGet();
   }
 
-  /** package */ String getUniqueIdForTickerId(int tickerId) {
+  /** package */
+  String getUniqueIdForTickerId(int tickerId) {
     return _tickerId2uniqueId.get(tickerId);
   }
 
-  /** package */ IBRequest getRequestForTickerId(int tickerId) {
+  /** package */
+  IBRequest getRequestForTickerId(int tickerId) {
     return _tickerId2request.get(tickerId);
   }
 
-  /** package */ void activateRequest(int tickerId, IBRequest request) {
+  /** package */
+  void activateRequest(int tickerId, IBRequest request) {
     if (request != null) {
+      s_logger.debug("activating request tid=" + tickerId + " req=" + request);
       _tickerId2request.put(tickerId, request);
       request.fireRequest();
     }
   }
 
-  /** package */ void terminateRequest(int tickerId) {
-    IBRequest req = _tickerId2request.remove(tickerId);
-    if (req != null) {
-      req.terminate();
+  /** package */
+  void terminateRequest(int tickerId) {
+    IBRequest request = _tickerId2request.remove(tickerId);
+    if (request != null) {
+      s_logger.debug("terminating request tid=" + tickerId + " req=" + request);
+      request.terminate();
+    } else {
+      s_logger.debug("cannot terminate unknown request tid=" + tickerId);
     }
   }
 
-  /** package */ BlockingQueue<IBDataChunk> getDataChunks() {
-    return _received;
+  /** package */
+  BlockingQueue<IBDataChunk> getDataChunks() {
+    return _chunks;
   }
 
   @Override
@@ -182,25 +220,45 @@ public class IBLiveDataServer extends StandardLiveDataServer {
 
   @Override
   protected Map<String, FudgeMsg> doSnapshot(Collection<String> uniqueIds) {
-    Map<String, FudgeMsg> returnValue = new HashMap<String, FudgeMsg>();
+    
+    final Map<String, FudgeMsg> snapshots = new HashMap<String, FudgeMsg>();
     
     for (String uniqueId : uniqueIds) {
       try {
-        MutableFudgeMsg snapshotSpec = OpenGammaFudgeContext.getInstance().newMessage();
-        int tickerId = System.identityHashCode(snapshotSpec);
-        s_logger.debug("IB preparing mkt data snapshot for uniqueId={} with tickerId={}", uniqueId, tickerId);
-        snapshotSpec.add("UNIQUE_ID", uniqueId);
-        snapshotSpec.add("TICKER_ID", String.valueOf(tickerId));
-        Contract contract = createContractFromId(uniqueId);
-        _connector.reqMktData(tickerId, contract, null, true);
-        returnValue.put(uniqueId, snapshotSpec);
+        int tickerId = getNextTickerId();
+        s_logger.debug("IB preparing market data snapshot for uniqueId={} with tickerId={}", uniqueId, tickerId);
+        IBMarketDataRequest req = new IBMarketDataRequest(this, uniqueId, true) {
+          @Override
+          protected void publishResponse() {
+            FudgeMsg response = getResponse();
+            // TODO: how to handle response==null?
+            String cid = getUniqueId();
+            if (_waitingFor.contains(cid)) {
+              getLogger().debug("publishing completed market data snapshot for cid=" + cid + " res=" + response);
+              synchronized (IBLiveDataServer.this) {
+                // store response in snapshot map, mark as completed and wake up server thread
+                snapshots.put(cid, response);
+                _waitingFor.remove(cid);
+                IBLiveDataServer.this.notifyAll();
+              }
+            }
+          }
+        };
+        
+        req.setCurrentTickerId(tickerId);
+        activateRequest(tickerId, req);
+        
       } catch (NumberFormatException e) {
         s_logger.error("uniqueId {} is not a valid IB contract Id", uniqueId);
+        // TODO: what exception to throw in this case?
         continue;
       }
     }
     
-    return returnValue;
+    // let server wait until snapshots are collected
+    waitForSnapshotMarketData(uniqueIds);
+    
+    return snapshots;
   }
 
   /**
@@ -211,7 +269,7 @@ public class IBLiveDataServer extends StandardLiveDataServer {
    * @param uniqueId  the unique contract Id of the contract
    * @return Fudge message containing an instance of {@link ContractDetails}
    */
-  /** package */ FudgeMsg getContractDetailsSync(String uniqueId) {
+  protected FudgeMsg getContractDetails(String uniqueId) {
     IBRequest req = new IBContractDetailsRequest(this, uniqueId);
     int tickerId = getNextTickerId();
     req.setCurrentTickerId(tickerId);
@@ -219,10 +277,10 @@ public class IBLiveDataServer extends StandardLiveDataServer {
     
     while (!req.isResponseFinished()) {
       try {
-        s_logger.debug("waiting for contract details...");
+        s_logger.debug("waiting for IB contract details...");
         Thread.sleep(50);
       } catch (InterruptedException e) {
-        e.printStackTrace();
+        throw new OpenGammaRuntimeException("IB contract details wait interrupted", e);
       }
     }
     
@@ -231,12 +289,34 @@ public class IBLiveDataServer extends StandardLiveDataServer {
     return res;
   }
 
-  private Contract createContractFromId(String uniqueId) {
-    Contract contract = new Contract();
-    contract.m_conId = Integer.parseInt(uniqueId);
-    // TODO derive exchange from contract ID using reqContractDetails()
-    contract.m_exchange = "IDEALPRO";
-    return contract;
+  /**
+   * Let server wait until snapshots for all given identifiers are collected or timeout is exceeded.
+   * @param identifiers  the uniqueIds to wait on
+   */
+  protected synchronized void waitForSnapshotMarketData(final Collection<String> identifiers) {
+    s_logger.debug("Waiting for market data snapshot on {}", identifiers);
+    _waitingFor.addAll(identifiers);
+    try {
+      // Note: IB usually sends mkt data snapshot end marker 10-20 sec after last tick
+      // so the timeout should be at least 20 sec to account for multiple requests
+      final long completionTime = System.nanoTime() + getMarketDataTimeout();
+      while (!Collections.disjoint(identifiers, _waitingFor)) {
+        final long timeout = completionTime - System.nanoTime();
+        if (timeout < 1000000L) {
+          s_logger.info("IB timeout exceeded waiting for market data");
+          break;
+        }
+        try {
+          long timeToWait = timeout / 1000000L;
+          s_logger.info("IB waiting for market data for " + timeToWait);
+          wait(timeToWait);
+        } catch (InterruptedException e) {
+          throw new OpenGammaRuntimeException("IB market data snapshot wait interrupted", e);
+        }
+      }
+    } finally {
+      _waitingFor.removeAll(identifiers); // needed in case timeout was exceeded
+    }
   }
 
   @Override
@@ -248,7 +328,7 @@ public class IBLiveDataServer extends StandardLiveDataServer {
   protected void doConnect() {
     s_logger.debug("IB connection opening...");
     // set up callback; TODO: hook up with OpenGamma MarketDataSender
-    _callback = new OpenGammaIBWrapper(this);
+    _callback = new OpenGammaIBWrapper(getDataChunks());
 
     // connect to TWS
     _connector = new EClientSocket(_callback);
@@ -262,9 +342,17 @@ public class IBLiveDataServer extends StandardLiveDataServer {
       s_logger.debug("IB server " + _connector.serverVersion() + " handshake at " + _connector.TwsConnectionTime());
       s_logger.debug("IB connection openened (now open: " + _numConnections + ")");
       _dispatcher = new IBResponseDispatcher(this);
-      getExecutorService().submit(_dispatcher);
+      try {
+        getExecutorService().submit(_dispatcher);
+      } catch (RejectedExecutionException ex) {
+        String msg = "unable to spawn IB dispatcher";
+        s_logger.error(msg);
+        throw new OpenGammaRuntimeException(msg, ex);
+      }
     } else {
-      s_logger.debug("IB connection opening failed");
+      String msg = "IB connection opening failed";
+      s_logger.error(msg);
+      throw new OpenGammaRuntimeException(msg);
     }
   }
 
