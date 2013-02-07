@@ -31,6 +31,9 @@ public class IBContractDetailsRequest extends IBRequest {
       IBConstants.CONTRACT_DETAILS, 
       IBConstants.CONTRACT_DETAILS_END);
 
+  /** Separator char used in IB {@link ContractDetails#m_validExchanges} field */
+  private static final String VALID_EXCHANGES_SEPARATOR = ",";
+
   /** Data fields actually received during the lifecycle of this request. */
   private Set<String> _fieldNames = Sets.newHashSetWithExpectedSize(REQUIRED_FIELD_NAMES.size());
 
@@ -53,8 +56,7 @@ public class IBContractDetailsRequest extends IBRequest {
     contract.m_conId = getContractId();
     
     // fire async call to IB API
-    String msg = "firing IB contract details request for cid=" + getContractId() + " with tid=" + getCurrentTickerId();
-    getLogger().debug(msg);
+    getLogger().debug("firing IB contract details request for cid={} tid={}", getContractId(), getCurrentTickerId());
     EClientSocket conn = getConnector();
     conn.reqContractDetails(getCurrentTickerId(), contract);
   }
@@ -71,8 +73,7 @@ public class IBContractDetailsRequest extends IBRequest {
     }
     
     FudgeMsg data = chunk.getData();
-    String msg = "processing IB contract details response chunk: id=" + getCurrentTickerId() + "  cid=" + getContractId() + "  chunk=" + data;
-    getLogger().debug(msg);
+    getLogger().debug("processing IB contract details response chunk: cid={} tid={} data={}", new Object[] {getContractId(), getCurrentTickerId(), data});
     Set<String> chunkFieldNames = data.getAllFieldNames();
     for (String fieldName : chunkFieldNames) {
       if (IBConstants.CONTRACT_DETAILS.equals(fieldName)) {
@@ -81,7 +82,7 @@ public class IBContractDetailsRequest extends IBRequest {
         getFieldNames().add(fieldName);
       } else if (IBConstants.CONTRACT_DETAILS_END.equals(fieldName)) {
         // received the poison marker designating end of transmission
-        getLogger().debug("completed IB contract details request for cid=" + getContractId() + "  with tid=" + getCurrentTickerId());
+        getLogger().debug("completed IB contract details request for cid={} tid={}", getContractId(), getCurrentTickerId());
         getFieldNames().add(fieldName);
         publishResponse();
       }
@@ -101,24 +102,29 @@ public class IBContractDetailsRequest extends IBRequest {
 
   @Override
   protected void publishResponse() {
-    // override to do nothing, as this is an internal request, 
+    // implemented to do nothing (except logging), as this is an internal request, 
     // the response of which is only needed to fire other requests 
-    // (namely the exchange must be determined)
+    // (namely because the exchange must be determined)
+    FudgeMsg response = getResponse();
+    if (response != null) {
+      getLogger().debug("contract details request has finished: res={}", response);
+    }
   }
 
   /**
    * IB returns all valid exchanges where a contract is traded as part of a contract details request. 
-   * The exchanges are encoded in a comma-separated string. 
-   * This method splits the IB string into a normalized set.
+   * The exchanges are encoded in a string, values separated by {@value #VALID_EXCHANGES_SEPARATOR}. 
+   * This method splits the IB string into a normalized set using {@link #VALID_EXCHANGES_SEPARATOR}.
    * @param validExchanges string of valid exchanges as returned by IB
    * @return normalized set of exchange names
+   * @see #VALID_EXCHANGES_SEPARATOR
    * @see ContractDetails#m_validExchanges
    */
   public static final Set<String> getValidExchanges(String validExchanges) {
     if (validExchanges == null || validExchanges.isEmpty()) {
       return Collections.emptySet();
     }
-    String[] exchanges = validExchanges.split(",");
+    String[] exchanges = validExchanges.split(VALID_EXCHANGES_SEPARATOR);
     return Sets.newHashSet(exchanges);
   }
 

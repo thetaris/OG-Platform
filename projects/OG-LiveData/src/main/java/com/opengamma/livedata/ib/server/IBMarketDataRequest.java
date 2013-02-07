@@ -111,14 +111,16 @@ public class IBMarketDataRequest extends IBRequest {
     IBRequest req = new IBContractDetailsRequest(getServer(), getUniqueId()) {
       @Override
       protected void publishResponse() {
-        getLogger().debug("extracting exchange from contract details for cid=" + getContractId() + " req=" + IBMarketDataRequest.this);
-        FudgeMsg response = getResponse();
-        ContractDetails cd = response.getValue(ContractDetails.class, "contractDetails");
-        Contract filledContract = cd.m_summary;
-        String validExchanges = cd.m_validExchanges;
-        getLogger().debug("valid exchanges for cid=" + getContractId() + " sym=" + cd.m_summary.m_symbol + " are: " + validExchanges);
-        fireMarketDataRequest(filledContract, validExchanges);
-        getServer().terminateRequest(getCurrentTickerId());
+        if (!IBMarketDataRequest.this.isTerminated()) {
+          getLogger().debug("extracting exchange from contract details for cid={} req={}", getContractId(), IBMarketDataRequest.this);
+          FudgeMsg response = getResponse();
+          ContractDetails cd = response.getValue(ContractDetails.class, "contractDetails");
+          Contract filledContract = cd.m_summary;
+          String validExchanges = cd.m_validExchanges;
+          getLogger().debug("valid exchanges for cid={} are: {}", getContractId(), validExchanges);
+          fireMarketDataRequest(filledContract, validExchanges);
+        }
+        getServer().terminateRequest(getCurrentTickerId()); // terminate contract details request
       }
     };
     int tickerId = getServer().getNextTickerId();
@@ -127,6 +129,11 @@ public class IBMarketDataRequest extends IBRequest {
   }
 
   private void fireMarketDataRequest(Contract filledContract, String validExchanges) {
+    // check if we have been terminated while waiting for contract details
+    if (isTerminated()) {
+      getLogger().debug("abort firing market data request because it has been terminated: tid={}", getCurrentTickerId());
+      return;
+    }
     // build request data
     Contract contract = getContract();
     String exchange = filledContract.m_exchange;
@@ -139,14 +146,17 @@ public class IBMarketDataRequest extends IBRequest {
       }
       exchange = exchanges.iterator().next();
     }
-    getLogger().debug("using exchange=" + exchange + " for req=" + this);
+    getLogger().debug("using exchange={} for cid={} tid={}", new Object[] {exchange, getContractId(), getCurrentTickerId()});
     contract.m_exchange = exchange;
     
-    // fire async call to IB API
-    String msg = "firing IB market data request for cid=" + getContractId() + " with tid=" + getCurrentTickerId() + " snapshot=" + isSnapshot();
-    getLogger().debug(msg);
+    // fire async call to IB API, checking again if we have been terminating in the meantime
     EClientSocket conn = getConnector();
-    conn.reqMktData(getCurrentTickerId(), contract, getTickTags(), isSnapshot());
+    if (!isTerminated()) {
+      getLogger().debug("firing IB market data request for cid={} tid={} doSnapshot={}", new Object[] {getContractId(), getCurrentTickerId(), isSnapshot()});
+      conn.reqMktData(getCurrentTickerId(), contract, getTickTags(), isSnapshot());
+    } else {
+      getLogger().debug("abort firing market data request because it has been terminated: tid={}", getCurrentTickerId());
+    }
   }
 
   @Override
@@ -154,20 +164,22 @@ public class IBMarketDataRequest extends IBRequest {
     // sanity check input and state
     if (chunk == null) { return; }
     if (chunk.getTickerId() != getCurrentTickerId()) { return; }
+    if (isTerminated()) {
+      getLogger().warn("abort processing market data response chunk because this request has been terminated: tid={}", getCurrentTickerId());
+      return;
+    }
     
     FudgeMsg data = chunk.getData();
-    String msg = "processing IB market data response chunk: id=" + getCurrentTickerId() + "  cid=" + getContractId() + "  chunk=" + data;
-    getLogger().debug(msg);
-    Set<String> chunkFieldNames = data.getAllFieldNames();
-    for (String fieldName : chunkFieldNames) {
+    for (String fieldName : data.getAllFieldNames()) {
       if (getAcceptedFieldNames().contains(fieldName)) {
         getFieldNames().add(fieldName);
         // this chunk contains valid data for our request
         FudgeField field = data.getByName(fieldName);
+        getLogger().debug("processing IB market data response chunk: cid={} tid={} data={}", new Object[] {getContractId(), getCurrentTickerId(), data});
         if (isSnapshot()) {
           if (IBConstants.MARKET_DATA_SNAPSHOT_END.equals(fieldName)) {
             // received the poison marker designating end of transmission
-            getLogger().debug("completed IB market data snapshot request for cid=" + getContractId() + "  with tid=" + getCurrentTickerId());
+            getLogger().debug("completed IB market data snapshot request for cid={} tid={}", getContractId(), getCurrentTickerId());
             publishResponse();
             getServer().terminateRequest(getCurrentTickerId());
           } else {
@@ -188,7 +200,10 @@ public class IBMarketDataRequest extends IBRequest {
           publishResponse();
         }
       } else {
-        throw new IllegalStateException("received chunk with unexpected field name for market data request! tid=" + getCurrentTickerId() + " field=" + fieldName);
+        // may happen in case of unsupported generic ticks
+        // this implementation simply drops those chunks and logs a warning
+        s_logger.warn("dropping market data chunk with unexpected field name! tid={} field={}", getCurrentTickerId(), fieldName);
+        //throw new IllegalStateException("received market data chunk with unexpected field name! tid=" + getCurrentTickerId() + " field=" + fieldName);
       }
     }
   }
@@ -202,6 +217,16 @@ public class IBMarketDataRequest extends IBRequest {
     // on-going subscriptions never finish
     // the subscription is cancelled instead and the request terminated
     return false;
+  }
+
+  @Override
+  protected void publishResponse() {
+    FudgeMsg response = getResponse();
+    // TODO: how to handle response==null?
+    getLogger().debug("publishing market data change for cid={} tid={} res={}", new Object[] {getUniqueId(), getCurrentTickerId(), response});
+    if (response != null) {
+      getServer().liveDataReceived(getUniqueId(), response);
+    }
   }
 
   @Override

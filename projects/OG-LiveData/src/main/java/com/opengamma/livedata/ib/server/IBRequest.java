@@ -5,6 +5,7 @@
  */
 package com.opengamma.livedata.ib.server;
 
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.fudgemsg.FudgeMsg;
@@ -25,6 +26,7 @@ public abstract class IBRequest {
   private IBLiveDataServer _server;
   private String _uniqueId;
   private int _contractId;
+  private final AtomicBoolean _terminated;
 
   /** 
    * Response to this request.
@@ -43,6 +45,7 @@ public abstract class IBRequest {
   public IBRequest(IBLiveDataServer server, String uniqueId) {
     this._server = server;
     this._uniqueId = uniqueId;
+    this._terminated = new AtomicBoolean(false);
     try {
       this._contractId = Integer.parseInt(uniqueId);
     } catch (NumberFormatException e) {
@@ -116,30 +119,33 @@ public abstract class IBRequest {
    * @return true if the request is finished and its response available; 
    * false if the response is still pending
    */
-  public abstract boolean isResponseFinished();
+  protected abstract boolean isResponseFinished();
 
   /**
    * @return the logger to use; must not be null
    */
-  public abstract Logger getLogger();
+  protected abstract Logger getLogger();
 
   /**
    * Publishes the current response as retrieved via {@link #getResponse()}. 
-   * This should ideally be called once, after a request is fired and the response available, 
-   * or - in the case of ongoing subscriptions - when the next publishable response is complete.
+   * This will be called once for simple atomic requests, but may be called continuously 
+   * in the case of ongoing subscriptions (when the next publishable response is complete).
    */
-  protected void publishResponse() {
-    FudgeMsg response = getResponse();
-    if (response != null) {
-      getLogger().debug("request: " + this + " has finished -> trigger server liveDataReceived() with response: " + response);
-      getServer().liveDataReceived(getUniqueId(), response);
-    }
+  protected abstract void publishResponse();
+
+  /**
+   * A terminated request should no longer process any incoming data chunks or create repsonses.
+   * @return true if this request has been terminated 
+   */
+  protected boolean isTerminated() {
+    return _terminated.get();
   }
 
   /**
    * Terminate lifecycle of this request and clean up.
    */
   protected void terminate() {
+    _terminated.set(true);
     setResponse(null);
   }
 

@@ -18,7 +18,6 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 import org.fudgemsg.FudgeMsg;
 import org.fudgemsg.MutableFudgeMsg;
@@ -33,6 +32,7 @@ import com.ib.client.EWrapper;
 import com.opengamma.OpenGammaRuntimeException;
 import com.opengamma.core.id.ExternalSchemes;
 import com.opengamma.id.ExternalScheme;
+import com.opengamma.livedata.normalization.StandardRules;
 import com.opengamma.livedata.server.StandardLiveDataServer;
 import com.opengamma.livedata.server.Subscription;
 import com.opengamma.util.ArgumentChecker;
@@ -74,7 +74,7 @@ public class IBLiveDataServer extends StandardLiveDataServer {
   private final Map<Integer, IBRequest> _tickerId2request = new HashMap<Integer, IBRequest>();
   
   /** indicates progress for synchronous market data snapshots */
-  private final Set<String> _waitingFor = Sets.newSetFromMap(new ConcurrentHashMap<String, Boolean>());
+  private final Set<Integer> _waitingFor = Sets.newSetFromMap(new ConcurrentHashMap<Integer, Boolean>());
   
   /** blocking queue which holds data chunks produced by IB until they are consumed by requests */
   private final BlockingQueue<IBDataChunk> _chunks = new LinkedBlockingQueue<IBDataChunk>();
@@ -83,7 +83,7 @@ public class IBLiveDataServer extends StandardLiveDataServer {
   private TerminatableJob _dispatcher;
 
   /** timeout used when waiting for market data requests */
-  private long _marketDataTimeout = 60000000000L;
+  private long _marketDataTimeout = 20000000000L;
 
   public IBLiveDataServer(boolean isPerformanceCountingEnabled, String host, int port) {
     super(EHCacheUtils.createCacheManager(), isPerformanceCountingEnabled);
@@ -145,7 +145,7 @@ public class IBLiveDataServer extends StandardLiveDataServer {
   /** package */
   void activateRequest(int tickerId, IBRequest request) {
     if (request != null) {
-      s_logger.debug("activating request tid=" + tickerId + " req=" + request);
+      s_logger.debug("activating request tid={} req={}", tickerId, request);
       _tickerId2request.put(tickerId, request);
       request.fireRequest();
     }
@@ -155,10 +155,10 @@ public class IBLiveDataServer extends StandardLiveDataServer {
   void terminateRequest(int tickerId) {
     IBRequest request = _tickerId2request.remove(tickerId);
     if (request != null) {
-      s_logger.debug("terminating request tid=" + tickerId + " req=" + request);
+      s_logger.debug("terminating request tid={} req={}", tickerId, request);
       request.terminate();
     } else {
-      s_logger.debug("cannot terminate unknown request tid=" + tickerId);
+      s_logger.debug("cannot terminate unknown request tid={}", tickerId);
     }
   }
 
@@ -169,8 +169,8 @@ public class IBLiveDataServer extends StandardLiveDataServer {
 
   @Override
   protected Map<String, Object> doSubscribe(Collection<String> uniqueIds) {
-    // Note: connection state check is implemented as a decorator via verifyConnectionOk()
-    // So we assume the connection is alive at this point
+    // Note: connection state check is implemented in verifyConnectionOk()
+    // which is called before entering here, so we assume the connection is alive at this point
     
     ArgumentChecker.notNull(uniqueIds, "IB Contract IDs");
     if (uniqueIds.isEmpty()) {
@@ -179,18 +179,26 @@ public class IBLiveDataServer extends StandardLiveDataServer {
     s_logger.debug("Subscribing to {}", uniqueIds);
     
     final Map<String, Object> result = Maps.newHashMapWithExpectedSize(uniqueIds.size());
-    for (String id : uniqueIds) {
-      Object handle = doSubscribe(id, false);
-      result.put(id, handle);
+    for (String uniqueId : uniqueIds) {
+      try {
+        Object handle = doSubscribe(uniqueId);
+        result.put(uniqueId, handle);
+      } catch (NumberFormatException e) {
+        s_logger.warn("uniqueId {} is not a valid IB contract Id => ignoring this subscription", uniqueId);
+        // TODO: what exception to throw in this case?
+        continue;
+      }
     }
     return result;
   }
 
-  protected Object doSubscribe(String uniqueId, boolean snapshot) {
-    // TODO subscribe to market data feed for given IB contract
-    final Subscription subscription = getSubscription(uniqueId);
-    Object handle = new AtomicReference<FudgeMsg>();
-    return handle;
+  protected Object doSubscribe(String uniqueId) {
+    int tickerId = getNextTickerId();
+    s_logger.debug("IB preparing subscription to market data for cid={} tid={}", uniqueId, tickerId);
+    IBMarketDataRequest req = new IBMarketDataRequest(this, uniqueId, false);
+    req.setCurrentTickerId(tickerId);
+    activateRequest(tickerId, req);
+    return req;
   }
 
   @Override
@@ -214,31 +222,55 @@ public class IBLiveDataServer extends StandardLiveDataServer {
 
   @Override
   protected void doUnsubscribe(Collection<Object> subscriptionHandles) {
-    // TODO check connection
-    //eClientSocket.isConnected();
+    // Note: connection state check is implemented in verifyConnectionOk()
+    // which is called before entering here, so we assume the connection is alive at this point
+    for (Object handle : subscriptionHandles) {
+      if (handle instanceof IBRequest) {
+        IBRequest req = (IBRequest) handle;
+        // re-use tickerId from market data request so IB knows which data line to kill
+        int tickerId = req.getCurrentTickerId();
+        
+        // terminate the original market data request, so it doesn't receive/process chunks anymore
+        terminateRequest(tickerId);
+        
+        IBCancelMarketDataRequest creq = new IBCancelMarketDataRequest(this, req.getUniqueId(), tickerId);
+        // fire cancel request directly; 
+        // we do this to avoid putting the same tickerId in the tickerId2request map twice
+        // this is ok because we know there will be no callback anyway 
+        // and the request will be terminated immediately within this method 
+        creq.fireRequest();
+        
+        // just to be clean: terminate our cancel request (which does nothing atm.)
+        creq.terminate();
+      }
+    }
   }
 
   @Override
   protected Map<String, FudgeMsg> doSnapshot(Collection<String> uniqueIds) {
-    
+    // Note: connection state check is implemented in verifyConnectionOk()
+    // which is called before entering here, so we assume the connection is alive at this point
     final Map<String, FudgeMsg> snapshots = new HashMap<String, FudgeMsg>();
+    final Set<Integer> tickerIds = Sets.newHashSetWithExpectedSize(uniqueIds.size());
     
     for (String uniqueId : uniqueIds) {
       try {
         int tickerId = getNextTickerId();
-        s_logger.debug("IB preparing market data snapshot for uniqueId={} with tickerId={}", uniqueId, tickerId);
+        s_logger.debug("preparing market data snapshot for cid={} tid={}", uniqueId, tickerId);
         IBMarketDataRequest req = new IBMarketDataRequest(this, uniqueId, true) {
           @Override
           protected void publishResponse() {
             FudgeMsg response = getResponse();
             // TODO: how to handle response==null?
-            String cid = getUniqueId();
-            if (_waitingFor.contains(cid)) {
-              getLogger().debug("publishing completed market data snapshot for cid=" + cid + " res=" + response);
+            int tid = getCurrentTickerId();
+            if (_waitingFor.contains(tid)) {
+              String cid = getUniqueId();
+              getLogger().debug("publishing completed market data snapshot for cid={} tid={} res={}", new Object[] {cid, tid, response});
               synchronized (IBLiveDataServer.this) {
                 // store response in snapshot map, mark as completed and wake up server thread
                 snapshots.put(cid, response);
-                _waitingFor.remove(cid);
+                _waitingFor.remove(tid);
+                getLogger().debug("removing tid={} from snapshot waitingFor set", tid);
                 IBLiveDataServer.this.notifyAll();
               }
             }
@@ -246,6 +278,7 @@ public class IBLiveDataServer extends StandardLiveDataServer {
         };
         
         req.setCurrentTickerId(tickerId);
+        tickerIds.add(tickerId);
         activateRequest(tickerId, req);
         
       } catch (NumberFormatException e) {
@@ -256,7 +289,7 @@ public class IBLiveDataServer extends StandardLiveDataServer {
     }
     
     // let server wait until snapshots are collected
-    waitForSnapshotMarketData(uniqueIds);
+    waitForSnapshotMarketData(tickerIds);
     
     return snapshots;
   }
@@ -290,38 +323,46 @@ public class IBLiveDataServer extends StandardLiveDataServer {
   }
 
   /**
-   * Let server wait until snapshots for all given identifiers are collected or timeout is exceeded.
-   * @param identifiers  the uniqueIds to wait on
+   * Let server wait until snapshots for all given tickerIds are collected or timeout is exceeded.
+   * @param tickerIds  the tickerIds to wait on
    */
-  protected synchronized void waitForSnapshotMarketData(final Collection<String> identifiers) {
-    s_logger.debug("Waiting for market data snapshot on {}", identifiers);
-    _waitingFor.addAll(identifiers);
+  protected synchronized void waitForSnapshotMarketData(final Collection<Integer> tickerIds) {
+    s_logger.debug("waiting for market data snapshot on {}", tickerIds);
+    _waitingFor.addAll(tickerIds);
     try {
       // Note: IB usually sends mkt data snapshot end marker 10-20 sec after last tick
       // so the timeout should be at least 20 sec to account for multiple requests
       final long completionTime = System.nanoTime() + getMarketDataTimeout();
-      while (!Collections.disjoint(identifiers, _waitingFor)) {
+      while (!Collections.disjoint(tickerIds, _waitingFor)) {
+        s_logger.debug("still waiting for market data snapshot on {}", _waitingFor);
         final long timeout = completionTime - System.nanoTime();
         if (timeout < 1000000L) {
-          s_logger.info("IB timeout exceeded waiting for market data");
+          s_logger.warn("timeout exceeded waiting for market data");
           break;
         }
         try {
           long timeToWait = timeout / 1000000L;
-          s_logger.info("IB waiting for market data for " + timeToWait);
+          s_logger.debug("waiting for market data for {}", timeToWait);
           wait(timeToWait);
         } catch (InterruptedException e) {
           throw new OpenGammaRuntimeException("IB market data snapshot wait interrupted", e);
         }
       }
     } finally {
-      _waitingFor.removeAll(identifiers); // needed in case timeout was exceeded
+      _waitingFor.removeAll(tickerIds); // needed in case timeout was exceeded
     }
   }
 
   @Override
   protected ExternalScheme getUniqueIdDomain() {
     return ExternalSchemes.IB_CONTRACT;
+  }
+
+  @Override
+  public String getDefaultNormalizationRuleSetId() {
+    // TODO: figure out how to normalize IB market data responses
+    //return super.getDefaultNormalizationRuleSetId();
+    return StandardRules.getNoNormalization().getId();
   }
 
   @Override
@@ -339,8 +380,8 @@ public class IBLiveDataServer extends StandardLiveDataServer {
     // Note: isConnected() is not synchronized, so this can't be 100% safe, but it's not critical
     if (_connector.isConnected()) {
       _numConnections++;
-      s_logger.debug("IB server " + _connector.serverVersion() + " handshake at " + _connector.TwsConnectionTime());
-      s_logger.debug("IB connection openened (now open: " + _numConnections + ")");
+      s_logger.debug("IB server v={} handshake at {}", _connector.serverVersion(), _connector.TwsConnectionTime());
+      s_logger.debug("IB connection openened (now open: {})", _numConnections);
       _dispatcher = new IBResponseDispatcher(this);
       try {
         getExecutorService().submit(_dispatcher);
@@ -373,7 +414,7 @@ public class IBLiveDataServer extends StandardLiveDataServer {
     // Note: isConnected() is not synchronized, so this can't be 100% safe, but it's not critical
     if (!_connector.isConnected()) {
       _numConnections--;
-      s_logger.debug("IB connection closed (now open: " + _numConnections + ")");
+      s_logger.debug("IB connection closed (now open: {})", _numConnections);
     } else {
       s_logger.debug("IB connection closing failed");
     }

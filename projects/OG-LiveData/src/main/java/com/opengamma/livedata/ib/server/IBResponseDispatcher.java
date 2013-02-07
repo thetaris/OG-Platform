@@ -32,9 +32,7 @@ public class IBResponseDispatcher extends TerminatableJob {
   protected void runOneCycle() {
     try {
       IBDataChunk chunk = _server.getDataChunks().take();
-      FudgeMsg data = chunk.getData();
-      String msg = "received IB response chunk tid=" + chunk.getTickerId() + " data=" + data;
-      s_logger.debug(msg);
+      //s_logger.debug("received IB response chunk: tid={} data={}", chunk.getTickerId(), chunk.getData());
       dispatch(chunk);
     } catch (InterruptedException e) {
       throw new OpenGammaRuntimeException("IB data chunk queue take wait interrupted", e);
@@ -45,13 +43,13 @@ public class IBResponseDispatcher extends TerminatableJob {
     int tickerId = chunk.getTickerId();
     IBRequest req = _server.getRequestForTickerId(tickerId);
     if (req != null) {
-      s_logger.debug("dispatching IB response chunk tid=" + tickerId + " to request: " + req);
+      s_logger.debug("dispatching IB response chunk tid={} to request: {}", tickerId, req);
       req.processChunk(chunk);
     } else {
-      // this should not happen, as only finished requests are removed from the map
-      // TODO: handle case of terminated subscriptions: should those chunks belonging 
-      // to the response for the request last made before termination be discarded here?
-      throw new IllegalStateException("received IB response chunk for unknown request! tid=" + tickerId);
+      // may happen in case of terminated subscriptions
+      // this implementation simply drops those chunks and logs a warning
+      s_logger.warn("dropping IB response chunk for unknown or terminated request! tid={}", tickerId);
+      //throw new IllegalStateException("received IB response chunk for unknown or terminated request! tid=" + tickerId);
     }
   }
 

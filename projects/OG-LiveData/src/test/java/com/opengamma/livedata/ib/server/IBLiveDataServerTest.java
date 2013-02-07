@@ -17,9 +17,8 @@ import java.util.Set;
 
 import org.fudgemsg.FudgeContext;
 import org.fudgemsg.FudgeMsg;
-import org.testng.annotations.AfterMethod;
-import org.testng.annotations.BeforeClass;
-import org.testng.annotations.BeforeMethod;
+import org.testng.annotations.AfterTest;
+import org.testng.annotations.BeforeTest;
 import org.testng.annotations.Test;
 
 import com.google.common.collect.Sets;
@@ -34,7 +33,7 @@ import com.opengamma.livedata.msg.LiveDataSubscriptionResponse;
 import com.opengamma.livedata.msg.LiveDataSubscriptionResponseMsg;
 import com.opengamma.livedata.msg.LiveDataSubscriptionResult;
 import com.opengamma.livedata.msg.SubscriptionType;
-import com.opengamma.livedata.normalization.StandardRules;
+import com.opengamma.livedata.server.FieldHistoryStore;
 import com.opengamma.livedata.server.MapLastKnownValueStoreProvider;
 import com.opengamma.livedata.server.Subscription;
 import com.opengamma.livedata.server.distribution.MarketDataDistributor;
@@ -62,21 +61,18 @@ public class IBLiveDataServerTest {
   private IBLiveDataServer _server;
   private FudgeContext _fudgeContext;
 
-  @BeforeClass
-  public void setUpBeforeClass() {
+  @BeforeTest
+  public void setUpBeforeTest() {
     // need to call this once to build Fudge object and type dictionary
     _fudgeContext = OpenGammaFudgeContext.getInstance();
-  }
-
-  @BeforeMethod
-  public void setUp() {
     _server = new IBLiveDataServer(true, "", 7496);
     _domain = _server.getUniqueIdDomain();
+    // only connect once for all test methods
     _server.connect();
   }
 
-  @AfterMethod
-  public void tearDown() {
+  @AfterTest
+  public void tearDownAfterTest() {
     _server.disconnect();
   }
 
@@ -108,11 +104,21 @@ public class IBLiveDataServerTest {
     // actually these exchanges are valid: SMART,BATEDE,CHIXDE,FWB,IBIS,MIBSX,SWB
     assertTrue("Several exchanges should be listed as a valid exchange", exchanges.size() > 1);
     assertTrue("FWB should be listed as a valid exchange", exchanges.contains("FWB"));
-    snapshot();
+    
+    msg = _server.getContractDetails(CONTRACT_ID_4);
+    assertNotNull(msg);
+    cd = msg.getValue(ContractDetails.class, "contractDetails");
+    assertEquals(Integer.parseInt(CONTRACT_ID_4), cd.m_summary.m_conId);
+    assertEquals("Symbol should be BMW", "BMW", cd.m_summary.m_symbol);
+    assertEquals("Currency should be EUR", "EUR", cd.m_summary.m_currency);
+    exchanges = IBContractDetailsRequest.getValidExchanges(cd.m_validExchanges);
+    // actually these exchanges are valid: SMART,BATEDE,CHIXDE,FWB,IBIS,MIBSX,SWB,TRQXDE
+    assertTrue("Several exchanges should be listed as a valid exchange", exchanges.size() > 1);
+    assertTrue("IBIS should be listed as a valid exchange", exchanges.contains("IBIS"));
   }
 
   public void subscription() {
-    getMethods(CONTRACT_ID_1, true); 
+    getMethods(CONTRACT_ID_2, true);
   }
 
   private LiveDataSpecification getSpec(String uniqueId) {
@@ -124,6 +130,8 @@ public class IBLiveDataServerTest {
 
   private void getMethods(String uniqueId, boolean persistent) {
     LiveDataSpecification spec = getSpec(uniqueId);    
+    
+    System.out.println("IB market data subscription on uid=" + uniqueId);
     
     LiveDataSubscriptionResponse result = _server.subscribe(uniqueId, persistent);
 
@@ -155,8 +163,14 @@ public class IBLiveDataServerTest {
     assertEquals(1, _server.getActiveSubscriptionIds().size());
     assertEquals(uniqueId, _server.getActiveSubscriptionIds().iterator().next());
     
-    assertEquals(0, _server.getNumLiveDataUpdatesSentPerSecondOverLastMinute(), 0.0001);
-    assertEquals(0, _server.getNumMarketDataUpdatesReceived());
+    // let some ticks flow in
+    System.out.println("IB market data flowing in for 1 second...");
+    try {Thread.sleep(1000);} catch (InterruptedException ex) {}
+    
+    long updates = _server.getNumMarketDataUpdatesReceived();
+    System.out.println("IB market data updates=" + updates);
+    double updateRate = _server.getNumLiveDataUpdatesSentPerSecondOverLastMinute();
+    System.out.println("IB market data updateRate=" + updateRate);
     
     MarketDataDistributor distributor = subscription.getDistributors().iterator().next();
         
@@ -166,39 +180,29 @@ public class IBLiveDataServerTest {
     
     assertTrue(distributor.isPersistent() == persistent);
     assertNull(distributor.getExpiry());
+    
+    FieldHistoryStore history = subscription.getLiveDataHistory();
+    assertNotNull(history);
+    System.out.println("IB market data sample LKV: " + history.getLastKnownValues());
   }
 
   public void subscribeUnsubscribeA() {
-    _server.subscribe(CONTRACT_ID_1, false);
-    //_server.subscribe("persistent", true);
-    
-    assertTrue(_server.unsubscribe(CONTRACT_ID_1));
-    //assertTrue(_server.unsubscribe("persistent"));
-    
-    assertNull(_server.getSubscription(CONTRACT_ID_1));
-    //assertNull(_server.getSubscription("persistent"));
-    
-    assertFalse(_server.isSubscribedTo(CONTRACT_ID_1));
-    //assertFalse(_server.isSubscribedTo("persistent"));
+    _server.subscribe(CONTRACT_ID_2, false);
+    assertTrue(_server.unsubscribe(CONTRACT_ID_2));
+    assertNull(_server.getSubscription(CONTRACT_ID_2));
+    assertFalse(_server.isSubscribedTo(CONTRACT_ID_2));
   }
 
   public void subscribeUnsubscribeB() {
-    _server.subscribe(CONTRACT_ID_1, false);
-    //_server.subscribe("persistent", true);
-    
-    Subscription nonpersistent = _server.getSubscription(CONTRACT_ID_1); 
-    //Subscription persistent = _server.getSubscription("persistent");
-    
+    _server.subscribe(CONTRACT_ID_2, false);
+    Subscription nonpersistent = _server.getSubscription(CONTRACT_ID_2); 
     assertTrue(_server.unsubscribe(nonpersistent));
-    //assertTrue(_server.unsubscribe(persistent));  
   }
 
   public void subscribeUnsubscribeC() {
-    UserPrincipal user = new UserPrincipal("mark", "1.1.1.1");
+    UserPrincipal user = new UserPrincipal("ibSubscriptionTest", "127.0.0.1");
     
-    LiveDataSpecification requestedSpec = new LiveDataSpecification(
-        StandardRules.getNoNormalization().getId(), 
-        ExternalId.of(_domain, CONTRACT_ID_1));
+    LiveDataSpecification requestedSpec = getSpec(CONTRACT_ID_2);
     
     LiveDataSubscriptionRequest request = new LiveDataSubscriptionRequest(
         user,
@@ -209,25 +213,25 @@ public class IBLiveDataServerTest {
     
     checkResponse(user, requestedSpec, response);
     
-    assertTrue(_server.unsubscribe(CONTRACT_ID_1));
+    assertTrue(_server.unsubscribe(CONTRACT_ID_2));
     
     response = _server.subscriptionRequestMade(request);
     checkResponse(user, requestedSpec, response);
     
-    assertTrue(_server.unsubscribe(CONTRACT_ID_1));
+    assertTrue(_server.unsubscribe(CONTRACT_ID_2));
   }
 
   public void subscribeThenStopDistributor() {
-    _server.subscribe(CONTRACT_ID_1, false);
-    _server.subscribe(CONTRACT_ID_1, false);
-    //_server.subscribe(CONTRACT_ID_1, true);
+    _server.subscribe(CONTRACT_ID_2, false);
+    _server.subscribe(CONTRACT_ID_2, false);
+    _server.subscribe(CONTRACT_ID_2, true);
     
     assertEquals(1, _server.getNumActiveSubscriptions());
     
-    Subscription sub = _server.getSubscription(CONTRACT_ID_1);
+    Subscription sub = _server.getSubscription(CONTRACT_ID_2);
     assertEquals(1, sub.getDistributors().size());
 
-    LiveDataSpecification spec = getSpec(CONTRACT_ID_1);
+    LiveDataSpecification spec = getSpec(CONTRACT_ID_2);
     MarketDataDistributor distributor = _server.getMarketDataDistributor(spec);
     assertNotNull(distributor);
 
@@ -235,8 +239,8 @@ public class IBLiveDataServerTest {
     distributor.setPersistent(false);
     assertTrue(_server.stopDistributor(distributor));
     assertTrue(sub.getDistributors().isEmpty());
-    assertFalse(_server.isSubscribedTo(CONTRACT_ID_1));
-    assertNull(_server.getSubscription(CONTRACT_ID_1));
+    assertFalse(_server.isSubscribedTo(CONTRACT_ID_2));
+    assertNull(_server.getSubscription(CONTRACT_ID_2));
     assertNull(_server.getSubscription(spec));
     assertNull(_server.getMarketDataDistributor(spec));
     assertEquals(0, _server.getNumActiveSubscriptions());
@@ -248,13 +252,13 @@ public class IBLiveDataServerTest {
     //Subscription subscription = new Subscription(CONTRACT_ID_1, _server.getMarketDataSenderFactory(), _server.getLkvStoreProvider());
     //FudgeMsg snapshot = _server.doSnapshot(CONTRACT_ID_1);
     
-    UserPrincipal user = new UserPrincipal("ibTest", "127.0.0.1");
+    UserPrincipal user = new UserPrincipal("ibSnapshotTest", "127.0.0.1");
     
     LiveDataSpecification requestedSpec = getSpec(CONTRACT_ID_1);
     
     LiveDataSpecification requestedSpec2 = getSpec(CONTRACT_ID_2);
     
-    LiveDataSpecification requestedSpec3 = getSpec(CONTRACT_ID_3);
+    //LiveDataSpecification requestedSpec3 = getSpec(CONTRACT_ID_3);
     
     LiveDataSubscriptionRequest request = new LiveDataSubscriptionRequest(
         user,
@@ -266,10 +270,10 @@ public class IBLiveDataServerTest {
         SubscriptionType.SNAPSHOT, 
         Collections.singleton(requestedSpec2));
     
-    LiveDataSubscriptionRequest request3 = new LiveDataSubscriptionRequest(
-        user,
-        SubscriptionType.SNAPSHOT, 
-        Collections.singleton(requestedSpec3));
+//    LiveDataSubscriptionRequest request3 = new LiveDataSubscriptionRequest(
+//        user,
+//        SubscriptionType.SNAPSHOT, 
+//        Collections.singleton(requestedSpec3));
     
     LiveDataSubscriptionResponseMsg response = _server.subscriptionRequestMade(request);
     checkSnapshotResponse(user, requestedSpec, response);
@@ -322,12 +326,12 @@ public class IBLiveDataServerTest {
     assertEquals(user, response.getRequestingUser());
     assertEquals(1, response.getResponses().size());
     LiveDataSubscriptionResponse res = response.getResponses().get(0);
-    assertEquals(requestedSpec, res.getRequestedSpecification());
-    LiveDataSpecification fqs = res.getFullyQualifiedSpecification();
-    assertNotNull(fqs);
-    assertEquals(requestedSpec, fqs);
-    assertNull(res.getTickDistributionSpecification());
     assertEquals(LiveDataSubscriptionResult.SUCCESS, res.getSubscriptionResult());
+    assertEquals(requestedSpec, res.getRequestedSpecification());
+//    LiveDataSpecification fqs = res.getFullyQualifiedSpecification();
+//    assertNotNull(fqs);
+//    assertEquals(requestedSpec, fqs);
+    assertNull(res.getTickDistributionSpecification());
     assertEquals(null, res.getUserMessage());
     LiveDataValueUpdateBean data = res.getSnapshot();
     assertNotNull(data);
